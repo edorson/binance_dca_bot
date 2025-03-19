@@ -35,6 +35,7 @@
         const numGridOrders = document.getElementById("num_grid_orders");
         const percentIncrease = document.getElementById("percent_increase");
         const profitPercent = document.getElementById("profit_percent");
+        const reposition_threshold_percent = document.getElementById("reposition_threshold_percent");
 
         let valid = true;
         let messages = [];
@@ -55,9 +56,13 @@
           valid = false;
           messages.push("Количество ордеров должно быть от 1 до 200.");
         }
-        if (parseFloat(percentIncrease.value) <= 0) {
+        if (parseFloat(percentIncrease.value) < 0) {
           valid = false;
           messages.push("Процент увеличения объема ордеров должен быть не меньше 0.");
+        }
+        if (parseFloat(reposition_threshold_percent.value) <= 0) {
+          valid = false;
+          messages.push("Процент увеличения цены для сдвига сетки должен быть больше 0.");
         }
         if (parseFloat(profitPercent.value) <= 0) {
           valid = false;
@@ -115,6 +120,9 @@
       
       <label for="percent_increase">Процент увеличения объёма ордеров (%):</label>
       <input type="number" step="0.01" id="percent_increase" name="percent_increase" required min="0.00">
+      
+      <label for="reposition_threshold_percent">Процент увеличения цены для сдвига сетки (%):</label>
+      <input type="number" step="0.01" id="reposition_threshold_percent" name="reposition_threshold_percent" required min="0.01">
       
       <label for="profit_percent">Процент желаемой прибыли (%):</label>
       <input type="number" step="0.01" id="profit_percent" name="profit_percent" required min="0.01">

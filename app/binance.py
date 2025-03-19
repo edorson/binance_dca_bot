@@ -112,3 +112,23 @@ class BinanceClient:
             response = await client.delete(url, params=signed_params, headers=headers)
             response.raise_for_status()
             return response.json()
+
+    async def get_exchange_info(self) -> dict:
+        url = f"{self.BASE_URL}/api/v3/exchangeInfo"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.json()
+
+    async def get_order_status(self, symbol: str, orderId: int) -> dict:
+        """
+        Retrieves the status of an order.
+        """
+        url = f"{self.BASE_URL}/api/v3/order"
+        params = {"symbol": symbol, "orderId": orderId}
+        signed_params = self._sign_params(params)
+        headers = self._get_headers()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=signed_params, headers=headers)
+            response.raise_for_status()
+            return response.json()
