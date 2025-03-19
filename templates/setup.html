@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>Настройка бота Binance</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+      }
+      form {
+        margin-bottom: 30px;
+        padding: 15px;
+        border: 1px solid #ccc;
+      }
+      label {
+        display: block;
+        margin-top: 10px;
+      }
+      input, select {
+        width: 300px;
+        padding: 5px;
+        margin-top: 5px;
+      }
+      .error {
+        color: red;
+        font-size: 0.9em;
+      }
+    </style>
+    <script>
+      function validateTradingSettings() {
+        const usdtAmount = document.getElementById("usdt_amount");
+        const gridLength = document.getElementById("grid_length_percent");
+        const firstOrderOffset = document.getElementById("first_order_offset_percent");
+        const numGridOrders = document.getElementById("num_grid_orders");
+        const percentIncrease = document.getElementById("percent_increase");
+        const profitPercent = document.getElementById("profit_percent");
+
+        let valid = true;
+        let messages = [];
+
+        if (parseFloat(usdtAmount.value) < 5) {
+          valid = false;
+          messages.push("Сумма USDT должна быть не менее 5.");
+        }
+        if (parseFloat(gridLength.value) <= 0 || parseFloat(gridLength.value) >= 100) {
+          valid = false;
+          messages.push("Длина сетки должна быть больше 0 и меньше 100%.");
+        }
+        if (parseFloat(firstOrderOffset.value) <= 0 || parseFloat(firstOrderOffset.value) >= 100) {
+          valid = false;
+          messages.push("Отступ первого ордера должен быть больше 0 и меньше 100%.");
+        }
+        if (parseInt(numGridOrders.value) < 1 || parseInt(numGridOrders.value) > 200) {
+          valid = false;
+          messages.push("Количество ордеров должно быть от 1 до 200.");
+        }
+        if (parseFloat(percentIncrease.value) <= 0) {
+          valid = false;
+          messages.push("Процент увеличения объема ордеров должен быть не меньше 0.");
+        }
+        if (parseFloat(profitPercent.value) <= 0) {
+          valid = false;
+          messages.push("Процент желаемой прибыли должен быть больше 0.");
+        }
+
+        const errorContainer = document.getElementById("errorContainer");
+        errorContainer.innerHTML = "";
+        if (!valid) {
+          messages.forEach(msg => {
+            const p = document.createElement("p");
+            p.className = "error";
+            p.innerText = msg;
+            errorContainer.appendChild(p);
+          });
+        }
+        return valid;
+      }
+
+      function validateForm() {
+        return validateTradingSettings();
+      }
+    </script>
+  </head>
+  <body>
+    <h1>Настройка бота Binance</h1>
+    <div id="errorContainer"></div>
+    <form action="/setup" method="post" onsubmit="return validateForm()">
+      <h2>API ключи</h2>
+      <label for="api_key">API Key:</label>
+      <input type="text" id="api_key" name="api_key" required>
+      
+      <label for="api_secret">API Secret:</label>
+      <input type="password" id="api_secret" name="api_secret" required>
+      
+      <h2>Настройки торговли</h2>
+      <label for="trading_pair">Торговая пара:</label>
+      <select id="trading_pair" name="trading_pair" required>
+        <option value="">Выберите торговую пару</option>
+        <option value="BTC/USDT">BTC/USDT</option>
+        <option value="ETH/USDT">ETH/USDT</option>
+      </select>
+      
+      <label for="usdt_amount">Сумма USDT:</label>
+      <input type="number" step="0.01" id="usdt_amount" name="usdt_amount" required min="5">
+      
+      <label for="grid_length_percent">Длина сетки (%):</label>
+      <input type="number" step="0.01" id="grid_length_percent" name="grid_length_percent" required min="0.01" max="99.99">
+      
+      <label for="first_order_offset_percent">Отступ первого ордера (%):</label>
+      <input type="number" step="0.01" id="first_order_offset_percent" name="first_order_offset_percent" required min="0.01" max="99.99">
+      
+      <label for="num_grid_orders">Количество ордеров в сетке:</label>
+      <input type="number" id="num_grid_orders" name="num_grid_orders" required min="1" max="200">
+      
+      <label for="percent_increase">Процент увеличения объёма ордеров (%):</label>
+      <input type="number" step="0.01" id="percent_increase" name="percent_increase" required min="0.00">
+      
+      <label for="profit_percent">Процент желаемой прибыли (%):</label>
+      <input type="number" step="0.01" id="profit_percent" name="profit_percent" required min="0.01">
+      
+      <br><br>
+      <input type="submit" value="Подтвердить настройки">
+    </form>
+  </body>
+</html>

@@ -1,70 +1,63 @@
-# app/main.py
-from fastapi import FastAPI, HTTPException, Query
-from app.config import BINANCE_API_KEY, BINANCE_API_SECRET
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from app.models import APIKeys, TradingSettings
+from pydantic import ValidationError
 from app.binance import BinanceClient
 
-app = FastAPI(title="Binance API Integration")
+app = FastAPI(title="Trading Bot Setup")
+templates = Jinja2Templates(directory="templates")
 
-binance_client = BinanceClient(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
+@app.get("/", response_class=HTMLResponse)
+async def setup_form(request: Request):
+    return templates.TemplateResponse("setup.html", {"request": request})
 
-@app.get("/")
-async def root():
-    return {"message": "a FastAPI app for spot trading with Binance API"}
-
-@app.get("/price")
-async def get_price(symbol: str = Query(..., description="A trading pair, for example: BTCUSDT")):
-    try:
-        price_data = await binance_client.get_spot_price(symbol)
-        return price_data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/balance")
-async def get_balance(asset: str = Query(..., description="An asset code, for example: USDT")):
-    try:
-        balance = await binance_client.get_asset_balance(asset)
-        return {"asset": asset, "balance": balance}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/account")
-async def account_info():
-    try:
-        account = await binance_client.get_account_info()
-        return account
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/trades")
-async def trade_history(symbol: str = Query(..., description="A trading pair, for example: BTCUSDT")):
-    try:
-        trades = await binance_client.get_trade_history(symbol)
-        return trades
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/order")
-async def create_order(
-    symbol: str = Query(..., description="Trading pair, for example: BTCUSDT"),
-    side: str = Query(..., description="Order side: BUY or SELL"),
-    order_type: str = Query(..., description="Order type: LIMIT or MARKET"),
-    quantity: float = Query(..., description="Order quantity (volume)"),
-    price: float = Query(..., description="Order Price"),
-    timeInForce: str = Query("GTC", description="Time in force (usually, GTC for a LIMIT order)")
+@app.post("/setup", response_class=HTMLResponse)
+async def submit_setup(
+    request: Request,
+    api_key: str = Form(...),
+    api_secret: str = Form(...),
+    trading_pair: str = Form(...),
+    usdt_amount: float = Form(...),
+    grid_length_percent: float = Form(...),
+    first_order_offset_percent: float = Form(...),
+    num_grid_orders: int = Form(...),
+    percent_increase: float = Form(...),
+    profit_percent: float = Form(...),
 ):
     try:
-        order = await binance_client.create_order(symbol, side, quantity, price, order_type, timeInForce)
-        return order
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        keys = APIKeys(api_key=api_key, api_secret=api_secret)
+        settings = TradingSettings(
+            trading_pair=trading_pair,
+            usdt_amount=usdt_amount,
+            grid_length_percent=grid_length_percent,
+            first_order_offset_percent=first_order_offset_percent,
+            num_grid_orders=num_grid_orders,
+            percent_increase=percent_increase,
+            profit_percent=profit_percent,
+        )
+    except ValidationError as e:
+        return HTMLResponse(f"Ошибка валидации: {e}", status_code=400)
 
-@app.delete("/order")
-async def cancel_order(
-    symbol: str = Query(..., description="Trading pair, for example: BTCUSDT"),
-    orderId: int = Query(..., description="Id of the order to be cancelled")
-):
+    client = BinanceClient(api_key=api_key, api_secret=api_secret)
     try:
-        result = await binance_client.cancel_order(symbol, orderId)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        balance = await client.get_asset_balance("USDT")
+    except Exception as ex:
+        return HTMLResponse(f"Ошибка получения баланса: {ex}", status_code=500)
+
+    if balance < usdt_amount:
+        return HTMLResponse(
+            f"Недостаточно средств для торговли. Ваш баланс USDT: {balance}, требуется: {usdt_amount}",
+            status_code=400,
+        )
+
+    return HTMLResponse(
+        f"Ваш баланс USDT: {balance}.<br>"
+        # f"API ключи: {keys.json()}<br>"
+        f"Настройки торговли: {settings.json()}<br>"
+        f"<a href='/'>Вернуться</a>"
+    )
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)

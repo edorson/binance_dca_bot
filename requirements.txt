@@ -2,3 +2,6 @@ fastapi
 uvicorn[standard]
 httpx
 python-dotenv
+python-multipart
+jinja2
+pydantic
