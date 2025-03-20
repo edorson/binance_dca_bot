@@ -20,6 +20,9 @@ class TradingBot:
         self.monitor_task = None
         self.config = None
         self.initial_market_price = None
+        self.completed_cycles = 0
+        self.total_profit_usdt = 0.0
+        self.total_unsold_asset = 0.0
 
     async def start_cycle(
         self,
@@ -54,6 +57,10 @@ class TradingBot:
         
         self.current_grid_orders = []
         for order in grid_orders:
+            volume = order["asset_quantity"] * order["price"]
+            if volume < 5:
+                raise ValueError(f"Объём каждого ордера должен быть не менее 5 USDT, вычисленный объём: {volume:.7f} USDT")
+
             res = await self.client.create_order(
                 symbol=self.symbol,
                 side="BUY",
@@ -71,79 +78,90 @@ class TradingBot:
             self.monitor_task = asyncio.create_task(self.monitor_cycle())
         
         return {
-            "message": "Orders grid has been placed, monitor cycle started",
+            "message": "Сетка ордеров установлена, бот запущен",
             "market_price": self.initial_market_price,
             "placed_orders": self.current_grid_orders
         }
 
     async def monitor_cycle(self):
-        profit_percent = self.config["profit_percent"]
-
-        # Phase 1: Wait for cycle to start (no buy order filled yet)
-        while not self.cycle_started:
-            # Check status of each buy order in the grid
-            for order in self.current_grid_orders:
-                try:
-                    status = await self.client.get_order_status(self.symbol, order["order_id"])
-                    if status.get("status") == "FILLED":
-                        order["status"] = "FILLED"
-                        self.cycle_started = True
-                        logger.info(f"Cycle started: Order {order['order_id']} filled.")
-                        # Create fixing order immediately after first fill
-                        await self.create_fixing_order(profit_percent)
-                        break
-                except Exception as e:
-                    logger.error(f"Error checking status for order {order['order_id']}: {e}")
-
-            # If still not started, check if reposition is needed
-            if not self.cycle_started:
-                try:
-                    price_data = await self.client.get_spot_price(self.symbol)
-                    current_price = float(price_data["price"])
-                    # Trigger reposition is based on initial market price
-                    trigger_price = self.initial_market_price * (1 + self.reposition_threshold_percent / 100)
-                    if current_price >= trigger_price:
-                        logger.info(f"Repositioning grid: Current price {current_price} >= trigger price {trigger_price}.")
-                        await self.cancel_all_orders()
-                        await self._recreate_grid()
-                        # After grid recreation, update initial_market_price and continue monitoring
+        while True:
+            # Phase 1: Wait for cycle to start
+            while not self.cycle_started:
+                for order in self.current_grid_orders:
+                    try:
+                        status = await self.client.get_order_status(self.symbol, order["order_id"])
+                        if status.get("status") == "FILLED":
+                            order["status"] = "FILLED"
+                            self.cycle_started = True
+                            logger.info(f"Cycle started: Order {order['order_id']} filled.")
+                            # Create fixing order immediately after first fill.
+                            await self.create_fixing_order(self.config["profit_percent"])
+                            break
+                    except Exception as e:
+                        logger.error(f"Error checking status for order {order['order_id']}: {e}")
+                if not self.cycle_started:
+                    try:
                         price_data = await self.client.get_spot_price(self.symbol)
-                        self.initial_market_price = float(price_data["price"])
-                except Exception as e:
-                    logger.error(f"Error during reposition check: {e}")
-            await asyncio.sleep(MONITOR_INTERVAL)
-        
-        # Phase 2: Cycle started, monitor the fixing order and additional fills
-        while self.cycle_started:
-            # Check fixing order status
-            if self.fixing_order is not None:
-                try:
-                    status = await self.client.get_order_status(self.symbol, self.fixing_order["order_id"])
-                    if status.get("status") == "FILLED":
-                        logger.info(f"Fixing order {self.fixing_order['order_id']} filled. Cycle completed.")
-                        self.cycle_started = False  # Cycle finished
-                        # Cancel all not filled orders once cycle is done
-                        await self.cancel_all_orders()
-                        break
-                except Exception as e:
-                    logger.error(f"Error checking fixing order status: {e}")
-
-            # Check for additional buy order fills
-            additional_fill = False
-            for order in self.current_grid_orders:
-                try:
-                    status = await self.client.get_order_status(self.symbol, order["order_id"])
-                    if status.get("status") == "FILLED" and order.get("status") != "FILLED":
-                        order["status"] = "FILLED"
-                        additional_fill = True
-                except Exception as e:
-                    logger.error(f"Error checking status for order {order['order_id']}: {e}")
-
-            if additional_fill:
-                logger.info("Additional buy orders filled. Updating fixing order.")
-                await self.update_fixing_order(profit_percent)
-
-            await asyncio.sleep(MONITOR_INTERVAL)
+                        current_price = float(price_data["price"])
+                        # Trigger price is based on the initial market price
+                        trigger_price = self.initial_market_price * (1 + self.reposition_threshold_percent / 100)
+                        if current_price >= trigger_price:
+                            logger.info(f"Repositioning grid: Current price {current_price} >= trigger price {trigger_price}.")
+                            await self.cancel_all_orders()
+                            await self._recreate_grid()
+                            price_data = await self.client.get_spot_price(self.symbol)
+                            self.initial_market_price = float(price_data["price"])
+                    except Exception as e:
+                        logger.error(f"Error during reposition check: {e}")
+                await asyncio.sleep(MONITOR_INTERVAL)
+            
+            # Phase 2: Cycle started – monitor the fixing order and additional fills.
+            while self.cycle_started:
+                # Check fixing order status
+                if self.fixing_order is not None:
+                    try:
+                        status = await self.client.get_order_status(self.symbol, self.fixing_order["order_id"])
+                        if status.get("status") == "FILLED":
+                            # weighted_avg = self.fixing_order.get("weighted_avg_price", 0)
+                            # profit_usdt = (self.fixing_order["price"] - weighted_avg) * self.fixing_order["net_quantity"]
+                            fixing_order_income = await self.get_fixing_order_income()
+                            profit_usdt = fixing_order_income - self.fixing_order.get("total_sold_cost", 0)
+                            self.total_profit_usdt += profit_usdt
+                            self.total_unsold_asset += self.fixing_order["unsold_asset"]
+                            self.completed_cycles += 1
+                            logger.info(f"Fixing order {self.fixing_order['order_id']} filled. Cycle completed. Profit: {profit_usdt} USDT.")
+                            await self.cancel_all_orders()
+                            self.cycle_started = False
+                            break
+                    except Exception as e:
+                        logger.error(f"Error checking fixing order status: {e}")
+                
+                # Check for additional buy order fills and update fixing order if needed.
+                additional_fill = False
+                for order in self.current_grid_orders:
+                    try:
+                        status = await self.client.get_order_status(self.symbol, order["order_id"])
+                        if status.get("status") == "FILLED" and order.get("status") != "FILLED":
+                            order["status"] = "FILLED"
+                            additional_fill = True
+                    except Exception as e:
+                        logger.error(f"Error checking status for order {order['order_id']}: {e}")
+                if additional_fill:
+                    logger.info("Additional buy orders filled. Updating fixing order.")
+                    await self.update_fixing_order(self.config["profit_percent"])
+                
+                await asyncio.sleep(MONITOR_INTERVAL)
+            
+            # Cycle completed – automatically start a new cycle using stored configuration.
+            logger.info("Cycle completed. Starting new cycle automatically.")
+            await self.start_cycle(
+                usdt_amount=self.config["usdt_amount"],
+                grid_length_percent=self.config["grid_length_percent"],
+                first_order_offset_percent=self.config["first_order_offset_percent"],
+                num_grid_orders=self.config["num_grid_orders"],
+                increase_percent=self.config["increase_percent"],
+                profit_percent=self.config["profit_percent"]
+            )
 
     async def create_fixing_order(self, profit_percent: float) -> dict:
         asset = self.symbol.replace("USDT", "")  # e.g. "BTC" or "ETH"
@@ -176,8 +194,8 @@ class TradingBot:
         total_cost = sum(float(trade["qty"]) * float(trade["price"]) for trade in relevant_trades)
         total_commission = sum(float(trade["commission"]) for trade in relevant_trades if trade.get("commissionAsset") == asset)
         
-        net_qty = total_qty - total_commission
-        if net_qty <= 0:
+        net_qty_bought = total_qty - total_commission
+        if net_qty_bought <= 0:
             logger.error("Net quantity after commission is non-positive. Cannot create fixing order.")
             return {}
         
@@ -185,15 +203,14 @@ class TradingBot:
         sell_price = round(weighted_avg_price * (1 + profit_percent / 100), 2)
         
         # Determine rounding precision based on asset type
+        precision = 8  # default
         if asset.upper() == "BTC":
             precision = 5  # 0.00001
         elif asset.upper() == "ETH":
             precision = 4  # 0.0001
-        else:
-            precision = 8  # default
         
         factor = 10 ** precision
-        net_qty = math.floor(net_qty * factor) / factor  # round down
+        net_qty = math.floor(net_qty_bought * factor) / factor  # round down
         
         res = await self.client.create_order(
             symbol=self.symbol,
@@ -207,10 +224,23 @@ class TradingBot:
             "order_id": res.get("orderId"),
             "price": sell_price,
             "net_quantity": net_qty,
-            "status": res.get("status")
+            "unsold_asset":  net_qty_bought - net_qty,
+            "status": res.get("status"),
+            "weighted_avg_price": weighted_avg_price,
+            "total_sold_cost": total_cost,
         }
-        logger.info(f"Created fixing order at price {sell_price} for quantity {net_qty}")
+        logger.info(f"Created fixing order at price {sell_price} for quantity {net_qty_bought}")
         return res
+
+    async def get_fixing_order_income(self) -> float:
+        trades = await self.client.get_trade_history(self.symbol)
+        self.fixing_order["comission"] = 0.0
+        self.fixing_order["quoteQty"] = 0.0
+        for trade in trades:
+            if trade.get("orderId") == self.fixing_order["order_id"] and trade.get("commissionAsset") == "USDT":
+                self.fixing_order["comission"] += float(trade.get("commission", 0))
+                self.fixing_order["quoteQty"] += float(trade.get("quoteQty", 0))
+        return self.fixing_order["quoteQty"] - self.fixing_order["comission"]
 
     async def update_fixing_order(self, profit_percent: float) -> dict:
         """
